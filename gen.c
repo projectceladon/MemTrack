@@ -72,7 +72,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
 
     memcpy(records, record_templates,
            sizeof(struct memtrack_record) * allocated_records);
-    
+
     fp = fopen("/sys/class/drm/card0/i915_gem_objinfo", "r");
     if (fp == NULL) {
         return -errno;
@@ -118,6 +118,11 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                     break;
                }
 
+               /* Format:
+                *   Obj Identifier       Size Pin Tiling Dirty Shared Vmap Stolen Mappable  AllocState Global/PP  GttOffset (PID: handle count: user virt addrs)
+                *  ffff88000e998ac0:      16K             Y      N     N      N       N      allocated    G       04ef2000  (12609: 1: 000000004212e000)
+                */
+
                ret = sscanf(line, "%[0-9a-f]: %dK %[^\n]", kernel_address, &size, content);
 
                if (ret != 3) {
@@ -138,7 +143,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                    }
 
                    info = strchr(content, '(');
-                   
+
                    if (info == NULL) {
                        break;
                    }
@@ -163,9 +168,9 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                    unsigned long smaps_addr = 0;
                    unsigned long start, end, smaps_size;
 
-                   if (address1_output == 0  && address2_output == 0 && shared_count != 0) {
+                   if (address1_output == 0  && address2_output == 0 && shared_count != 0) { /* Handle pattern like: (12383: 1:)  (12437: 1:)  (12609: 1:) */
                        unaccounted_size += size / shared_count;
-                   }else if (address2_output == 0) {
+                   }else if (address2_output == 0) { /* Handle pattern like: (12364: 2:)  (12383: 1: 000000004046b000) */
                        fseek(smaps_fp, 0, SEEK_SET);
 
                        while (smaps_addr <= address1_output) {
@@ -183,11 +188,11 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                           }
 
                           if (sscanf(line, "Pss: %lu kB", &smaps_size) == 1 && shared_count != 0) {
-                              unaccounted_size += (size - smaps_size) / shared_count;
+                              unaccounted_size += size / shared_count - smaps_size;
                               break;
                           }
                        }
-                   }else {
+                   }else { /* Handle pattern like: (12437: 1: 000000004247f000 0000000042412000*) */
                        fseek(smaps_fp, 0, SEEK_SET);
 
                        while (smaps_addr <= address1_output || smaps_addr <= address2_output) {
