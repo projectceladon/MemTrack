@@ -163,7 +163,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                    unsigned long smaps_addr = 0;
                    unsigned long start, end, smaps_size;
 
-                   if (address1_output == 0  && address2_output == 0) {
+                   if (address1_output == 0  && address2_output == 0 && shared_count != 0) {
                        unaccounted_size += size / shared_count;
                    }else if (address2_output == 0) {
                        fseek(smaps_fp, 0, SEEK_SET);
@@ -182,7 +182,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                               continue;
                           }
 
-                          if (sscanf(line, "Pss: %lu kB", &smaps_size) == 1) {
+                          if (sscanf(line, "Pss: %lu kB", &smaps_size) == 1 && shared_count != 0) {
                               unaccounted_size += (size - smaps_size) / shared_count;
                               break;
                           }
