@@ -51,6 +51,13 @@ static bool free_key(void* key, void* value, void* context) {
     return true;
 }
 
+static int cmpfn(const void* a, const void* b)
+{
+    if (*(unsigned long *)a > *(unsigned long *)b) return 1;
+    if (*(unsigned long *)a < *(unsigned long *)b) return -1;
+    return 0;
+}
+
 int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                              struct memtrack_record *records,
                              size_t *num_records)
@@ -111,6 +118,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                char content[1024];
                char kernel_address[1024];
                char *info, *pch;
+               char *outptr, *innerptr;
                int shared_count;
                unsigned long address1_output = 0, address2_output = 0;
 
@@ -148,70 +156,57 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                        break;
                    }
 
-                   pch = strtok(info, "()");
+                   unsigned long user_addresses[16];
+                   int user_addresses_num = 0;
 
+                   pch = strtok_r(info, "()", &outptr);
                    while (pch != NULL) {
-                       if(strcmp(pch, "  ") > 0) {
-                           int address1, address2;
-                           shared_count++;
-                           ret = sscanf(pch, "%d: %*s %16x %16x", &matched_pid, &address1, &address2);
-                           if (matched_pid == pid && ret == 2) {
-                               address1_output = address1;
-                           }else if (matched_pid == pid && ret == 3) {
-                               address1_output = address1;
-                               address2_output = address2;
+                       if (strcmp(pch, "  ") > 0) {
+                           char addresses_output[1024];
+                           ret = sscanf(pch, "%d: %*d: %[^\n]", &matched_pid, addresses_output);
+                           if (ret == 1) { /* Handle pattern like: (12383: 1:) */
+                               shared_count++;
+                           }else {
+                             char* pch2;
+                             pch2 = strtok_r(addresses_output, " ", &innerptr);
+                             while (pch2 != NULL) { /* Handle pattern like:  (12383: 1: 000000004046b000) and (12437: 1: 000000004247f000 0000000042412000*) */
+                                 shared_count++;
+                                 if (matched_pid == pid) {
+                                     if (user_addresses_num <= 15) {
+                                         user_addresses[user_addresses_num++] = strtol(pch2, NULL, 16);
+                                     }
+                                 }
+                                 pch2 = strtok_r(NULL, " ", &innerptr);
+                             }
                            }
                        }
-                       pch = strtok(NULL, "()");
+                       pch = strtok_r(NULL, "()", &outptr);
                    }
+
+                   qsort(user_addresses, user_addresses_num, sizeof(user_addresses[0]), cmpfn);
 
                    unsigned long smaps_addr = 0;
                    unsigned long start, end, smaps_size;
 
-                   if (address1_output == 0  && address2_output == 0 && shared_count != 0) { /* Handle pattern like: (12383: 1:)  (12437: 1:)  (12609: 1:) */
+                   if (user_addresses_num == 0) { /* Handle pattern like: (12383: 1:)  (12437: 1:)  (12609: 1:) */
                        unaccounted_size += size / shared_count;
-                   }else if (address2_output == 0) { /* Handle pattern like: (12364: 2:)  (12383: 1: 000000004046b000) */
+                   }else { /* Handle pattern like: (12364: 2:)  (12383: 1: 000000004046b000) and (12437: 1: 000000004247f000 0000000042412000*) */
                        fseek(smaps_fp, 0, SEEK_SET);
 
-                       while (smaps_addr <= address1_output) {
-                          if (fgets(line, sizeof(line), smaps_fp) == NULL) {
-                              break;
-                          }
-
+                       int index = 0;
+                       while (fgets(line, sizeof(line), smaps_fp) != NULL && index < user_addresses_num) {
                           if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
                               smaps_addr = start;
                               continue;
                           }
 
-                          if (smaps_addr != address1_output) {
+                          if (smaps_addr != user_addresses[index]) {
                               continue;
                           }
 
                           if (sscanf(line, "Pss: %lu kB", &smaps_size) == 1 && shared_count != 0) {
                               unaccounted_size += size / shared_count - smaps_size;
-                              break;
-                          }
-                       }
-                   }else { /* Handle pattern like: (12437: 1: 000000004247f000 0000000042412000*) */
-                       fseek(smaps_fp, 0, SEEK_SET);
-
-                       while (smaps_addr <= address1_output || smaps_addr <= address2_output) {
-                          if (fgets(line, sizeof(line), smaps_fp) == NULL) {
-                              break;
-                          }
-
-                          if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
-                              smaps_addr = start;
-                              continue;
-                          }
-
-                          if (smaps_addr != address1_output && smaps_addr != address2_output) {
-                              continue;
-                          }
-
-                          if (sscanf(line, "Pss: %lu kB", &smaps_size) == 1) {
-                              unaccounted_size += size - smaps_size;
-                              continue;
+                              index++;
                           }
                        }
                    }
