@@ -188,7 +188,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                    unsigned long smaps_addr = 0;
                    unsigned long start, end, smaps_size;
 
-                   if (user_addresses_num == 0) { /* Handle pattern like: (12383: 1:)  (12437: 1:)  (12609: 1:) */
+                   if (user_addresses_num == 0 && shared_count != 0) { /* Handle pattern like: (12383: 1:)  (12437: 1:)  (12609: 1:) */
                        unaccounted_size += size / shared_count;
                    }else { /* Handle pattern like: (12364: 2:)  (12383: 1: 000000004046b000) and (12437: 1: 000000004247f000 0000000042412000*) */
                        fseek(smaps_fp, 0, SEEK_SET);
