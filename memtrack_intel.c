@@ -31,11 +31,9 @@ int intel_memtrack_get_memory(const struct memtrack_module *module,
                                 struct memtrack_record *records,
                                 size_t *num_records)
 {
-#if 0
     if (type == MEMTRACK_TYPE_GRAPHICS) {
         return gen_memtrack_get_memory(pid, type, records, num_records);
     }
-#endif
 
     return -EINVAL;
 }
