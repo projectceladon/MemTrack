@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <cutils/hashmap.h>
+#include <cutils/log.h>
 
 #include <hardware/memtrack.h>
 
@@ -36,14 +36,13 @@ static struct memtrack_record record_templates[] = {
     },
 };
 
-int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
+int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                              struct memtrack_record *records,
                              size_t *num_records)
 {
     size_t allocated_records = min(*num_records, ARRAY_SIZE(record_templates));
     int i;
     FILE *fp;
-    FILE *smaps_fp;
     char line[1024];
     char tmp[128];
     size_t unaccounted_size = 0;
@@ -58,68 +57,97 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     memcpy(records, record_templates,
            sizeof(struct memtrack_record) * allocated_records);
 
-    sprintf(tmp, "/sys/class/drm/card0/gfx_memtrack/%d", pid);
-
-    fp = fopen(tmp, "r");
+    /* Calculate active buffer */ 
+    fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/active_bo", "r");
     if (fp == NULL) {
         return -errno;
     }
 
-    snprintf(tmp, sizeof(tmp), "/proc/%d/smaps", pid);
-    smaps_fp = fopen(tmp, "r");
-    if (smaps_fp == NULL) {
-        fclose(fp);
-        return -errno;
-    }
-
     while (1) {
-        char line[1024];
-        int size;
-        int ret, matched_pid, Gfxmem, mapped_size = 0;
+        unsigned long size;
+        int ret;
 
         if (fgets(line, sizeof(line), fp) == NULL) {
-             break;
+            break;
         }
 
         /* Format:
-         *  PID    GfxMem   Process
-         * 2454    37060K /system/bin/surfaceflinger
-        */
+         * 39 p buffer objects: 9696 KB
+         */
+        ret = sscanf(line, "%*d p %*s %*s %zd\n", &size);
+        if (ret != 1) {
+            continue;
+        }
 
-        ret = sscanf(line, "%d %dK %*[^\n]", &matched_pid, &Gfxmem);
-
-        if (ret == 2 && matched_pid == pid) {
-            while (1) {
-                char cmdline[1024];
-                unsigned long smaps_size;
-
-                if (fgets(line, sizeof(line), smaps_fp) == NULL) {
-                    break;
-                }
-
-                if (sscanf(line, "%*s %*s %*s %*s %*s %[^\n]", cmdline) == 1) {
-                    continue;
-                }
-
-                if (strcmp(cmdline, "/dev/dri/card0") && strncmp(cmdline, "/drm mm object", 12)) {
-                    continue;
-                }
-
-                if (sscanf(line, "Rss: %lu kB", &smaps_size) == 1) {
-                    if (smaps_size) {
-                        mapped_size += smaps_size;
-                        continue;
-                    }
-                }
-            }
-            unaccounted_size = Gfxmem - mapped_size;
-            break;
+        if (pid == 1) {
+            unaccounted_size += size;
         }
     }
 
     records[0].size_in_bytes = unaccounted_size * 1024;
 
-    fclose(smaps_fp);
+    fclose(fp);
+
+    /* Calculate reserved_pool's buffer */
+    fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/reserved_pool", "r");
+    if (fp == NULL) {
+        return -errno;
+    }
+
+    while (1) {
+        unsigned long size;
+        int ret;
+
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            break;
+        }
+
+        /* Format:
+         * 16008 out of 18432 pages available
+         */
+        ret = sscanf(line, "%d %*s\n", &size);
+        if (ret != 1) {
+            continue;
+        }
+
+        if (pid == 1) {
+            unaccounted_size += size * 4;
+        }
+    }
+
+    records[0].size_in_bytes = unaccounted_size * 1024;
+
+    fclose(fp);
+
+    /* Calculate dynamic_pool's buffer */
+    fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/dynamic_pool", "r");
+    if (fp == NULL) {
+        return -errno;
+    }
+
+    while (1) {
+        unsigned long size;
+        int ret;
+
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            break;
+        }
+
+        /* Format:
+         * 16008 (max 18432) pages available
+         */
+        ret = sscanf(line, "%d %*s\n", &size);
+        if (ret != 1) {
+            continue;
+        }
+
+        if (pid == 1) {
+            unaccounted_size += size * 4;
+        }
+    }
+
+    records[0].size_in_bytes = unaccounted_size * 1024;
+
     fclose(fp);
 
     return 0;
