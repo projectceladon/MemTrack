@@ -36,28 +36,6 @@ struct memtrack_record record_templates[] = {
     },
 };
 
-static int str_hash(void *key)
-{
-    return hashmapHash(key, strlen(key));
-}
-
-static bool str_equals(void *keyA, void *keyB)
-{
-    return strcmp((char*)keyA, (char*)keyB) == 0;
-}
-
-static bool free_key(void* key, void* value, void* context) {
-    free(key);
-    return true;
-}
-
-static int cmpfn(const void* a, const void* b)
-{
-    if (*(unsigned long *)a > *(unsigned long *)b) return 1;
-    if (*(unsigned long *)a < *(unsigned long *)b) return -1;
-    return 0;
-}
-
 int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                              struct memtrack_record *records,
                              size_t *num_records)
@@ -87,135 +65,61 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
         return -errno;
     }
 
+    snprintf(tmp, sizeof(tmp), "/proc/%d/smaps", pid);
+    smaps_fp = fopen(tmp, "r");
+    if (smaps_fp == NULL) {
+        fclose(fp);
+        return -errno;
+    }
+
     while (1) {
-       char line[1024];
-       int size;
-       int ret, matched_pid;
+        char line[1024];
+        int size;
+        int ret, matched_pid, Gfxmem, mapped_size = 0;
 
-       if (fgets(line, sizeof(line), fp) == NULL) {
+        if (fgets(line, sizeof(line), fp) == NULL) {
+             break;
+        }
+
+        /* Format:
+         *  PID    GfxMem   Process
+         * 2454    37060K /system/bin/surfaceflinger
+        */
+
+        ret = sscanf(line, "%d %dK %*[^\n]", &matched_pid, &Gfxmem);
+
+        if (ret == 2 && matched_pid == pid) {
+            while (1) {
+                char cmdline[1024];
+                unsigned long smaps_size;
+
+                if (fgets(line, sizeof(line), smaps_fp) == NULL) {
+                    break;
+                }
+
+                if (sscanf(line, "%*s %*s %*s %*s %*s %[^\n]", cmdline) == 1) {
+                    continue;
+                }
+
+                if (strcmp(cmdline, "/dev/dri/card0") && strncmp(cmdline, "/drm mm object", 12)) {
+                    continue;
+                }
+
+                if (sscanf(line, "Rss: %lu kB", &smaps_size) == 1) {
+                    if (smaps_size) {
+                        mapped_size += smaps_size;
+                        continue;
+                    }
+                }
+            }
+            unaccounted_size = Gfxmem - mapped_size;
             break;
-       }
-
-       sprintf(tmp, "/proc/%d/smaps", pid);
-       smaps_fp = fopen(tmp, "r");
-       if (smaps_fp == NULL) {
-          fclose(fp);
-          return -errno;
-       }
-
-       Hashmap *kernel_address_map = hashmapCreate(32, str_hash, str_equals);
-       if (kernel_address_map == NULL) {
-          fclose(fp);
-          fclose(smaps_fp);
-          return -errno;
-       }
-
-       while (1) {
-           char content[1024];
-           char kernel_address[1024];
-           char *info, *pch;
-           char *outptr, *innerptr;
-           int shared_count;
-           unsigned long address1_output = 0, address2_output = 0;
-
-           if (fgets(line, sizeof(line), fp) == NULL) {
-                break;
-           }
-
-           /* Format:
-            *   Obj Identifier       Size Pin Tiling Dirty Shared Vmap Stolen Mappable  AllocState Global/PP  GttOffset (PID: handle count: user virt addrs)
-            *  ffff88000e998ac0:      16K             Y      N     N      N       N      allocated    G       04ef2000  (12609: 1: 000000004212e000)
-            */
-
-           ret = sscanf(line, "%[0-9a-f]: %dK %[^\n]", kernel_address, &size, content);
-
-           if (ret != 3) {
-               if (sscanf(line, "  PID %s", content) == 1) {
-                   break;
-               }
-           }else {
-               if (hashmapContainsKey(kernel_address_map, kernel_address)) {
-                   continue;
-               }else {
-                   char* key = strdup(kernel_address);
-                   hashmapPut(kernel_address_map, key, &size);
-               }
-
-               shared_count = 0;
-               if (strstr(content, "allocated") == NULL && strstr(content, "purgeable") == NULL) {
-                   continue;
-               }
-
-               info = strchr(content, '(');
-
-               if (info == NULL) {
-                   break;
-               }
-
-               unsigned long user_addresses[16];
-               int user_addresses_num = 0;
-
-               pch = strtok_r(info, "()", &outptr);
-               while (pch != NULL) {
-                   if (strcmp(pch, "  ") > 0) {
-                       char addresses_output[1024];
-                       ret = sscanf(pch, "%d: %*d: %[^\n]", &matched_pid, addresses_output);
-                       if (ret == 1) { /* Handle pattern like: (12383: 1:) */
-                           shared_count++;
-                       }else {
-                         char* pch2;
-                         pch2 = strtok_r(addresses_output, " ", &innerptr);
-                         while (pch2 != NULL) { /* Handle pattern like:  (12383: 1: 000000004046b000) and (12437: 1: 000000004247f000 0000000042412000*) */
-                             shared_count++;
-                             if (matched_pid == pid) {
-                                 if (user_addresses_num <= 15) {
-                                     user_addresses[user_addresses_num++] = strtol(pch2, NULL, 16);
-                                 }
-                             }
-                             pch2 = strtok_r(NULL, " ", &innerptr);
-                         }
-                       }
-                   }
-                   pch = strtok_r(NULL, "()", &outptr);
-               }
-
-               qsort(user_addresses, user_addresses_num, sizeof(user_addresses[0]), cmpfn);
-
-               unsigned long smaps_addr = 0;
-               unsigned long start, end, smaps_size;
-
-               if (user_addresses_num == 0 && shared_count != 0) { /* Handle pattern like: (12383: 1:)  (12437: 1:)  (12609: 1:) */
-                   unaccounted_size += size / shared_count;
-               }else { /* Handle pattern like: (12364: 2:)  (12383: 1: 000000004046b000) and (12437: 1: 000000004247f000 0000000042412000*) */
-                   fseek(smaps_fp, 0, SEEK_SET);
-
-                   int index = 0;
-                   while (fgets(line, sizeof(line), smaps_fp) != NULL && index < user_addresses_num) {
-                      if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
-                          smaps_addr = start;
-                          continue;
-                      }
-
-                      if (smaps_addr != user_addresses[index]) {
-                          continue;
-                      }
-
-                      if (sscanf(line, "Pss: %lu kB", &smaps_size) == 1 && shared_count != 0) {
-                          unaccounted_size += size / shared_count - smaps_size;
-                          index++;
-                      }
-                   }
-               }
-          }
-       }
-
-       fclose(smaps_fp);
-       hashmapForEach(kernel_address_map, free_key, (void*)0);
-       hashmapFree(kernel_address_map);
+        }
     }
 
     records[0].size_in_bytes = unaccounted_size * 1024;
 
+    fclose(smaps_fp);
     fclose(fp);
 
     return 0;
