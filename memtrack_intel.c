@@ -35,6 +35,10 @@ int intel_memtrack_get_memory(const struct memtrack_module *module,
         return gen_memtrack_get_memory(pid, type, records, num_records);
     }
 
+    if (type == MEMTRACK_TYPE_OTHER) {
+        return zram_memtrack_get_memory(pid, type, records, num_records);
+    }
+
     return -EINVAL;
 }
 

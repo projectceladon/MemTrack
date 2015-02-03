@@ -21,4 +21,8 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                              struct memtrack_record *records,
                              size_t *num_records);
 
+int zram_memtrack_get_memory(pid_t pid, enum memtrack_type type,
+                             struct memtrack_record *records,
+                             size_t *num_records);
+
 #endif
