@@ -43,7 +43,7 @@ static long get_zram_used_total_size()
     int len;
     char line[1024];
     unsigned long used_total = 0;
- 
+
     fp = fopen("/sys/block/zram0/mem_used_total", "r");
     if (fp == NULL) {
         return used_total;
@@ -65,7 +65,7 @@ static long get_swapped_total_size()
     char line[1024];
     unsigned long swap_free = 0;
     unsigned long swap_total = 0;
- 
+
     fp = fopen("/proc/meminfo", "r");
     if (fp == NULL) {
         return -errno;

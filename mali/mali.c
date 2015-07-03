@@ -36,7 +36,7 @@ static struct memtrack_record record_templates[] = {
     },
 };
 
-int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
+int mali_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                              struct memtrack_record *records,
                              size_t *num_records)
 {
@@ -57,96 +57,69 @@ int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     memcpy(records, record_templates,
            sizeof(struct memtrack_record) * allocated_records);
 
-    /* Calculate active buffer */ 
-    fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/active_bo", "r");
+    sprintf(tmp, "/sys/kernel/debug/mali/gpu_memory");
+
+    fp = fopen(tmp, "r");
     if (fp == NULL) {
         return -errno;
     }
 
     while (1) {
-        unsigned long size;
-        int ret;
+        char line[1024];
+        int size;
+        int ret, matched_pid, Gfxmem;
 
         if (fgets(line, sizeof(line), fp) == NULL) {
-            break;
+             break;
         }
 
         /* Format:
-         * 39 p buffer objects: 9696 KB
-         */
-        ret = sscanf(line, "%*d p %*s %*s %zd\n", &size);
-        if (ret != 1) {
-            continue;
-        }
+         * Name (:bytes)              pid         mali_mem    max_mali_mem     external_mem     ump_mem     dma_mem
+         * RenderThread               3941        13008896    37167104         0                0           11640832
+        */
 
-        if (pid == 1) {
-            unaccounted_size += size;
+        ret = sscanf(line, "  %*25[^\n] %d %d %*[^\n]", &matched_pid, &Gfxmem);
+
+        if (ret == 2 && matched_pid == pid) {
+            ALOGD("Gfxmem is %d", Gfxmem);
+            unaccounted_size = Gfxmem;
+            break;
         }
     }
-
-    records[0].size_in_bytes = unaccounted_size * 1024;
 
     fclose(fp);
 
-    /* Calculate reserved_pool's buffer */
-    fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/reserved_pool", "r");
+    sprintf(tmp, "/sys/kernel/debug/ion/cma-heap");
+
+    fp = fopen(tmp, "r");
     if (fp == NULL) {
         return -errno;
     }
 
     while (1) {
-        unsigned long size;
-        int ret;
+        char line[1024];
+        int size;
+        int ret, matched_pid, IONmem;
 
         if (fgets(line, sizeof(line), fp) == NULL) {
-            break;
+             break;
         }
 
         /* Format:
-         * 16008 out of 18432 pages available
-         */
-        ret = sscanf(line, "%d %*s\n", &size);
-        if (ret != 1) {
+         *           client              pid             size
+         *   surfaceflinger              179         33423360
+        */
+
+        ret = sscanf(line, "%*s %d %d %*[^\n]", &matched_pid, &IONmem);
+
+        if (ret == 2 && matched_pid == pid) {
+            ALOGD("IONmem is %d", IONmem);
+            unaccounted_size += IONmem;
             continue;
         }
-
-        if (pid == 1) {
-            unaccounted_size += size * 4;
-        }
     }
 
-    records[0].size_in_bytes = unaccounted_size * 1024;
-
-    fclose(fp);
-
-    /* Calculate dynamic_pool's buffer */
-    fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/dynamic_pool", "r");
-    if (fp == NULL) {
-        return -errno;
-    }
-
-    while (1) {
-        unsigned long size;
-        int ret;
-
-        if (fgets(line, sizeof(line), fp) == NULL) {
-            break;
-        }
-
-        /* Format:
-         * 16008 (max 18432) pages available
-         */
-        ret = sscanf(line, "%d %*s\n", &size);
-        if (ret != 1) {
-            continue;
-        }
-
-        if (pid == 1) {
-            unaccounted_size += size * 4;
-        }
-    }
-
-    records[0].size_in_bytes = unaccounted_size * 1024;
+    records[0].size_in_bytes = unaccounted_size;
 
     fclose(fp);
 
