@@ -61,51 +61,34 @@ int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     memcpy(records, record_templates,
            sizeof(struct memtrack_record) * allocated_records);
 
-    sprintf(tmp, "/proc/%d/cmdline", pid);
-
-    fp = fopen(tmp, "r");
-
-    if (fp == NULL) {
-        return -errno;
-    }
-
-    if (fgets(cmdline, sizeof(cmdline), fp) == NULL) {
-        fclose(fp);
-        return -errno;
-    }
-
-    fclose(fp);
-
-    pdir = opendir("/sys/kernel/debug/mali/mem");
+    pdir = opendir("/sys/kernel/debug/mali0/ctx");
 
     if (pdir == NULL) {
         return -errno;
     }
 
     while (pdirent = readdir(pdir)) {
+        int ret, matched_pid;
+
         if (strcmp(pdirent->d_name, ".") == 0 ||
             strcmp(pdirent->d_name, "..") == 0) {
             continue;
         }
 
-        sprintf(tmp, "/sys/kernel/debug/mali/mem/%s", pdirent->d_name);
+        ret = sscanf(pdirent->d_name, "%d_%*d", &matched_pid);
 
-        fp = fopen(tmp, "r");
+        if (ret == 1 && matched_pid == pid) { 
+            sprintf(tmp, "/sys/kernel/debug/mali0/ctx/%s/mem_profile", pdirent->d_name);
 
-        if (fp == NULL) {
-            closedir(pdir);
-            return -errno;
-        }
+            fp = fopen(tmp, "r");
 
-        if (fgets(line, sizeof(line), fp) == NULL) {
-            fclose(fp);
-            continue;
-        }
+            if (fp == NULL) {
+               closedir(pdir);
+               return -errno;
+            }
 
-        if (strncmp(cmdline, line, strlen(cmdline)) == 0) {
             while(1) {
                 size_t Gfxmem;
-                int ret;
                 fseek(fp, -50, SEEK_END);
 
                 if (fgets(line, sizeof(line), fp) == NULL) {
@@ -122,12 +105,12 @@ int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                 if (ret == 1) {
                     ALOGD("Gfxmem is %zd", Gfxmem);
                     unaccounted_size = Gfxmem;
-                    fclose(fp);
                     break;
                 }
             }
+            fclose(fp);
         }
-        fclose(fp);
+        break;
     }
 
     closedir(pdir);
