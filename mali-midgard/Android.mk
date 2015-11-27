@@ -21,6 +21,6 @@ include $(CLEAR_VARS)
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_C_INCLUDES += hardware/libhardware/include
 LOCAL_SHARED_LIBRARIES := liblog libcutils
-LOCAL_SRC_FILES := memtrack_intel.c mali-midgard.c zram.c
+LOCAL_SRC_FILES := memtrack_intel.c mali-midgard.c ion.c zram.c
 LOCAL_MODULE := memtrack.$(TARGET_BOARD_PLATFORM)
 include $(BUILD_SHARED_LIBRARY)

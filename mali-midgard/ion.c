@@ -37,7 +37,48 @@ static struct memtrack_record record_templates[] = {
     },
 };
 
-int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
+size_t get_ion(pid_t pid, char* ion_heap)
+{
+    FILE *fp;
+    char tmp[128];
+    size_t unaccounted_size = 0;
+
+    sprintf(tmp, "/d/ion/heaps/%s", ion_heap);
+
+    fp = fopen(tmp, "r");
+    if (fp == NULL) {
+        ALOGE("%s not found", ion_heap);
+        return 0;
+    }
+
+    while(1) {
+        char line[1024];
+        int ret, matched_pid;
+        size_t IONmem;
+
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            break;
+        }
+
+        /* Format:
+         *           client              pid             size
+         *   surfaceflinger              179         33423360
+        */
+
+        ret = sscanf(line, "%*s %d %zd %*[^\n]", &matched_pid, &IONmem);
+
+        if (ret == 2 && matched_pid == pid) {
+            ALOGE("ION is %zd", IONmem);
+            unaccounted_size += IONmem;
+            continue;
+        }
+    }
+    fclose(fp);
+    return unaccounted_size;
+}
+
+
+int ion_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                              struct memtrack_record *records,
                              size_t *num_records)
 {
@@ -47,7 +88,6 @@ int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     DIR *pdir;
     struct dirent *pdirent;
     char line[1024];
-    char cmdline[64];
     char tmp[128];
     size_t unaccounted_size = 0;
 
@@ -61,58 +101,9 @@ int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     memcpy(records, record_templates,
            sizeof(struct memtrack_record) * allocated_records);
 
-    pdir = opendir("/sys/kernel/debug/mali0/ctx");
-
-    if (pdir == NULL) {
-        return -errno;
-    }
-
-    while (pdirent = readdir(pdir)) {
-        int ret, matched_pid;
-
-        if (strcmp(pdirent->d_name, ".") == 0 ||
-            strcmp(pdirent->d_name, "..") == 0) {
-            continue;
-        }
-
-        ret = sscanf(pdirent->d_name, "%d_%*d", &matched_pid);
-
-        if (ret == 1 && matched_pid == pid) { 
-            sprintf(tmp, "/sys/kernel/debug/mali0/ctx/%s/mem_profile", pdirent->d_name);
-
-            fp = fopen(tmp, "r");
-
-            if (fp == NULL) {
-               closedir(pdir);
-               return -errno;
-            }
-
-            while(1) {
-                size_t Gfxmem;
-                fseek(fp, -50, SEEK_END);
-
-                if (fgets(line, sizeof(line), fp) == NULL) {
-                     break;
-                }
-
-                /* Format:
-                 * .....
-                 * Total allocated memory: 2822048
-                */
-
-                ret = sscanf(line, "Total allocated memory: %zd", &Gfxmem);
-
-                if (ret == 1) {
-                    unaccounted_size = Gfxmem;
-                    break;
-                }
-            }
-            fclose(fp);
-        }
-        break;
-    }
-
-    closedir(pdir);
+    unaccounted_size += get_ion(pid, "cma-heap");
+    unaccounted_size += get_ion(pid, "protected-heap");
+    unaccounted_size += get_ion(pid, "secured-heap");
 
     records[0].size_in_bytes = unaccounted_size;
 
