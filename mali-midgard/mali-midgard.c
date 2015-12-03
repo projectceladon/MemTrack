@@ -103,13 +103,14 @@ int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                 ret = sscanf(line, "Total allocated memory: %zd", &Gfxmem);
 
                 if (ret == 1) {
-                    unaccounted_size = Gfxmem;
+                    ALOGE("Gfxmem is %zd", Gfxmem);
+                    unaccounted_size += Gfxmem;
                     break;
                 }
             }
             fclose(fp);
+            break;
         }
-        break;
     }
 
     closedir(pdir);
