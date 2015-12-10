@@ -61,11 +61,11 @@ size_t get_ion(pid_t pid, char* ion_heap)
         }
 
         /* Format:
-         *           client              pid             size
-         *   surfaceflinger              179         33423360
+         *           client              pid             size proportional_size
+         *   surfaceflinger              179         33423360          33423360
         */
 
-        ret = sscanf(line, "%*s %d %zd %*[^\n]", &matched_pid, &IONmem);
+        ret = sscanf(line, "%*s %d %*zd %zd %*[^\n]", &matched_pid, &IONmem);
 
         if (ret == 2 && matched_pid == pid) {
             ALOGE("ION is %zd", IONmem);
