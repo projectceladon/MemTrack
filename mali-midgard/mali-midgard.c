@@ -78,7 +78,7 @@ int mali_midgard_memtrack_get_memory(pid_t pid, enum memtrack_type type,
         ret = sscanf(pdirent->d_name, "%d_%*d", &matched_pid);
 
         if (ret == 1 && matched_pid == pid) { 
-            sprintf(tmp, "/sys/kernel/debug/mali0/ctx/%s/mem_profile", pdirent->d_name);
+            snprintf(tmp, 128, "/sys/kernel/debug/mali0/ctx/%s/mem_profile", pdirent->d_name);
 
             fp = fopen(tmp, "r");
 

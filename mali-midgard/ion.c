@@ -43,7 +43,7 @@ size_t get_ion(pid_t pid, char* ion_heap)
     char tmp[128];
     size_t unaccounted_size = 0;
 
-    sprintf(tmp, "/d/ion/heaps/%s", ion_heap);
+    snprintf(tmp, 128, "/d/ion/heaps/%s", ion_heap);
 
     fp = fopen(tmp, "r");
     if (fp == NULL) {
