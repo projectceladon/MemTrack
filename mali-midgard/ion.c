@@ -29,6 +29,9 @@
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
+//#define LOG_NDEBUG 0
+#define LOG_TAG "DisplayION"
+
 static struct memtrack_record record_templates[] = {
     {
         .flags = MEMTRACK_FLAG_SMAPS_UNACCOUNTED |
@@ -47,7 +50,6 @@ size_t get_ion(pid_t pid, char* ion_heap)
 
     fp = fopen(tmp, "r");
     if (fp == NULL) {
-        ALOGE("%s not found", ion_heap);
         return 0;
     }
 
