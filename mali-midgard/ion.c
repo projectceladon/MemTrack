@@ -103,9 +103,21 @@ int ion_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     memcpy(records, record_templates,
            sizeof(struct memtrack_record) * allocated_records);
 
-    unaccounted_size += get_ion(pid, "cma-heap");
-    unaccounted_size += get_ion(pid, "protected-heap");
-    unaccounted_size += get_ion(pid, "secured-heap");
+    pdir = opendir("/d/ion/heaps");
+    if (pdir == NULL) {
+        ALOGE("Couldn't opendir /d/ion/heaps");
+        return -errno;
+    }
+
+    while((pdirent = readdir(pdir)) != NULL) {
+        if (strcmp(pdirent->d_name, ".") == 0 ||
+            strcmp(pdirent->d_name, "..") == 0) {
+            continue;
+        }
+
+        unaccounted_size += get_ion(pid, pdirent->d_name);
+    }
+    closedir(pdir);
 
     records[0].size_in_bytes = unaccounted_size;
 
