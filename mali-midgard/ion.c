@@ -30,7 +30,6 @@
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
 //#define LOG_NDEBUG 0
-#define LOG_TAG "DisplayION"
 
 static struct memtrack_record record_templates[] = {
     {
@@ -70,7 +69,7 @@ size_t get_ion(pid_t pid, char* ion_heap)
         ret = sscanf(line, "%*s %d %*zd %zd %*[^\n]", &matched_pid, &IONmem);
 
         if (ret == 2 && matched_pid == pid) {
-            ALOGE("ION is %zd", IONmem);
+            ALOGD("ION is %zd", IONmem);
             unaccounted_size += IONmem;
             continue;
         }
