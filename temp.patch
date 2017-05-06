@@ -1,0 +1,600 @@
+From c21295c3069d42a9d233e5bfa6ab6aab54f63604 Mon Sep 17 00:00:00 2001
+From: Beiyuan Hu <beiyuan.hu@intel.com>
+Date: Mon, 16 Jan 2017 08:46:20 +0800
+Subject: [PATCH] Add graphic memtrack module.
+
+Change-Id: Id49ae45b082820b00a8fb062fccd341906f6aa44
+Tracked-On: https://jira01.devtools.intel.com/browse/ATP-639
+Signed-off-by: Hu Beiyuan <beiyuan.hu@intel.com>
+---
+
+diff --git a/joule/display/libmemtrack/Android.mk b/joule/display/libmemtrack/Android.mk
+new file mode 100644
+index 0000000..47b6d2b
+--- /dev/null
++++ b/joule/display/libmemtrack/Android.mk
+@@ -0,0 +1,26 @@
++# Copyright (C) 2014 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++LOCAL_PATH := $(call my-dir)
++
++# HAL module implemenation stored in
++# hw/<POWERS_HARDWARE_MODULE_ID>.<ro.hardware>.so
++include $(CLEAR_VARS)
++
++LOCAL_MODULE_RELATIVE_PATH := hw
++LOCAL_C_INCLUDES += hardware/libhardware/include
++LOCAL_SHARED_LIBRARIES := liblog libcutils
++LOCAL_SRC_FILES := memtrack_intel.c gen.c zram.c hmm.c
++LOCAL_MODULE := memtrack.$(TARGET_BOARD_PLATFORM)
++include $(BUILD_SHARED_LIBRARY)
+diff --git a/joule/display/libmemtrack/gen.c b/joule/display/libmemtrack/gen.c
+new file mode 100644
+index 0000000..53bc8d6
+--- /dev/null
++++ b/joule/display/libmemtrack/gen.c
+@@ -0,0 +1,125 @@
++/*
++ * Copyright (C) 2014 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <cutils/hashmap.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/mman.h>
++
++#include <hardware/memtrack.h>
++
++#include "memtrack_intel.h"
++
++#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
++#define min(x, y) ((x) < (y) ? (x) : (y))
++
++static struct memtrack_record record_templates[] = {
++    {
++        .flags = MEMTRACK_FLAG_SMAPS_UNACCOUNTED | MEMTRACK_FLAG_PRIVATE |
++                 MEMTRACK_FLAG_NONSECURE,
++    },
++};
++
++int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
++                            struct memtrack_record* records,
++                            size_t* num_records) {
++  size_t allocated_records = min(*num_records, ARRAY_SIZE(record_templates));
++  int i;
++  FILE* fp;
++  FILE* smaps_fp;
++  char line[1024];
++  char tmp[128];
++  size_t unaccounted_size = 0;
++
++  *num_records = ARRAY_SIZE(record_templates);
++
++  /* fastpath to return the necessary number of records */
++  if (allocated_records == 0) {
++    return 0;
++  }
++
++  memcpy(records, record_templates,
++         sizeof(struct memtrack_record) * allocated_records);
++
++  sprintf(tmp, "/sys/class/drm/card0/gfx_memtrack/%d", pid);
++
++  fp = fopen(tmp, "r");
++  if (fp == NULL) {
++    return -errno;
++  }
++
++  snprintf(tmp, sizeof(tmp), "/proc/%d/smaps", pid);
++  smaps_fp = fopen(tmp, "r");
++  if (smaps_fp == NULL) {
++    fclose(fp);
++    return -errno;
++  }
++
++  while (1) {
++    char line[1024];
++    int size;
++    int ret, matched_pid, Gfxmem, mapped_size = 0;
++
++    if (fgets(line, sizeof(line), fp) == NULL) {
++      break;
++    }
++
++    /* Format:
++     *  PID    GfxMem   Process
++     * 2454    37060K /system/bin/surfaceflinger
++    */
++
++    ret = sscanf(line, "%d %dK %*[^\n]", &matched_pid, &Gfxmem);
++
++    if (ret == 2 && matched_pid == pid) {
++      while (1) {
++        char cmdline[1024];
++        unsigned long smaps_size;
++
++        if (fgets(line, sizeof(line), smaps_fp) == NULL) {
++          break;
++        }
++
++        if (sscanf(line, "%*s %*s %*s %*s %*s %[^\n]", cmdline) == 1) {
++          continue;
++        }
++
++        if (strcmp(cmdline, "/dev/dri/card0") &&
++            strncmp(cmdline, "/drm mm object", 12)) {
++          continue;
++        }
++
++        if (sscanf(line, "Rss: %lu kB", &smaps_size) == 1) {
++          if (smaps_size) {
++            mapped_size += smaps_size;
++            continue;
++          }
++        }
++      }
++      unaccounted_size = Gfxmem - mapped_size;
++      break;
++    }
++  }
++
++  records[0].size_in_bytes = unaccounted_size * 1024;
++
++  fclose(smaps_fp);
++  fclose(fp);
++
++  return 0;
++}
+diff --git a/joule/display/libmemtrack/hmm.c b/joule/display/libmemtrack/hmm.c
+new file mode 100644
+index 0000000..2e2eab2
+--- /dev/null
++++ b/joule/display/libmemtrack/hmm.c
+@@ -0,0 +1,152 @@
++/*
++ * Copyright (C) 2014 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <cutils/log.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/mman.h>
++
++#include <hardware/memtrack.h>
++
++#include "memtrack_intel.h"
++
++#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
++#define min(x, y) ((x) < (y) ? (x) : (y))
++
++static struct memtrack_record record_templates[] = {
++    {
++        .flags = MEMTRACK_FLAG_SMAPS_UNACCOUNTED | MEMTRACK_FLAG_PRIVATE |
++                 MEMTRACK_FLAG_NONSECURE,
++    },
++};
++
++int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
++                            struct memtrack_record* records,
++                            size_t* num_records) {
++  size_t allocated_records = min(*num_records, ARRAY_SIZE(record_templates));
++  int i;
++  FILE* fp;
++  char line[1024];
++  char tmp[128];
++  size_t unaccounted_size = 0;
++
++  *num_records = ARRAY_SIZE(record_templates);
++
++  /* fastpath to return the necessary number of records */
++  if (allocated_records == 0) {
++    return 0;
++  }
++
++  memcpy(records, record_templates,
++         sizeof(struct memtrack_record) * allocated_records);
++
++  /* Calculate active buffer */
++  fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/active_bo", "r");
++  if (fp == NULL) {
++    return -errno;
++  }
++
++  while (1) {
++    unsigned long size;
++    int ret;
++
++    if (fgets(line, sizeof(line), fp) == NULL) {
++      break;
++    }
++
++    /* Format:
++     * 39 p buffer objects: 9696 KB
++     */
++    ret = sscanf(line, "%*d p %*s %*s %zd\n", &size);
++    if (ret != 1) {
++      continue;
++    }
++
++    if (pid == 1) {
++      unaccounted_size += size;
++    }
++  }
++
++  records[0].size_in_bytes = unaccounted_size * 1024;
++
++  fclose(fp);
++
++  /* Calculate reserved_pool's buffer */
++  fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/reserved_pool", "r");
++  if (fp == NULL) {
++    return -errno;
++  }
++
++  while (1) {
++    unsigned long size;
++    int ret;
++
++    if (fgets(line, sizeof(line), fp) == NULL) {
++      break;
++    }
++
++    /* Format:
++     * 16008 out of 18432 pages available
++     */
++    ret = sscanf(line, "%d %*s\n", &size);
++    if (ret != 1) {
++      continue;
++    }
++
++    if (pid == 1) {
++      unaccounted_size += size * 4;
++    }
++  }
++
++  records[0].size_in_bytes = unaccounted_size * 1024;
++
++  fclose(fp);
++
++  /* Calculate dynamic_pool's buffer */
++  fp = fopen("/sys/devices/pci0000:00/0000:00:03.0/dynamic_pool", "r");
++  if (fp == NULL) {
++    return -errno;
++  }
++
++  while (1) {
++    unsigned long size;
++    int ret;
++
++    if (fgets(line, sizeof(line), fp) == NULL) {
++      break;
++    }
++
++    /* Format:
++     * 16008 (max 18432) pages available
++     */
++    ret = sscanf(line, "%d %*s\n", &size);
++    if (ret != 1) {
++      continue;
++    }
++
++    if (pid == 1) {
++      unaccounted_size += size * 4;
++    }
++  }
++
++  records[0].size_in_bytes = unaccounted_size * 1024;
++
++  fclose(fp);
++
++  return 0;
++}
+diff --git a/joule/display/libmemtrack/memtrack_intel.c b/joule/display/libmemtrack/memtrack_intel.c
+new file mode 100644
+index 0000000..00f88d7
+--- /dev/null
++++ b/joule/display/libmemtrack/memtrack_intel.c
+@@ -0,0 +1,62 @@
++/*
++ * Copyright (C) 2013 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <errno.h>
++
++#include <hardware/memtrack.h>
++
++#include "memtrack_intel.h"
++
++int intel_memtrack_init(const struct memtrack_module* module) {
++  return 0;
++}
++
++int intel_memtrack_get_memory(const struct memtrack_module* module, pid_t pid,
++                              int type, struct memtrack_record* records,
++                              size_t* num_records) {
++  if (type == MEMTRACK_TYPE_GRAPHICS) {
++    return gen_memtrack_get_memory(pid, type, records, num_records);
++  }
++
++  if (type == MEMTRACK_TYPE_OTHER) {
++    return zram_memtrack_get_memory(pid, type, records, num_records);
++  }
++
++  if (type == MEMTRACK_TYPE_CAMERA) {
++    return hmm_memtrack_get_memory(pid, type, records, num_records);
++  }
++
++  return -EINVAL;
++}
++
++static struct hw_module_methods_t memtrack_module_methods = {
++    .open = NULL,
++};
++
++struct memtrack_module HAL_MODULE_INFO_SYM = {
++  common : {
++    tag : HARDWARE_MODULE_TAG,
++    module_api_version : MEMTRACK_MODULE_API_VERSION_0_1,
++    hal_api_version : HARDWARE_HAL_API_VERSION,
++    id : MEMTRACK_HARDWARE_MODULE_ID,
++    name : "INTEL Memory Tracker HAL",
++    author : "The Android Open Source Project",
++    methods : &memtrack_module_methods,
++  },
++
++  init : intel_memtrack_init,
++  getMemory : intel_memtrack_get_memory,
++};
+diff --git a/joule/display/libmemtrack/memtrack_intel.h b/joule/display/libmemtrack/memtrack_intel.h
+new file mode 100644
+index 0000000..6067151
+--- /dev/null
++++ b/joule/display/libmemtrack/memtrack_intel.h
+@@ -0,0 +1,32 @@
++/*
++ * Copyright (C) 2013 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef _MEMTRACK_INTEL_H_
++#define _MEMTRACK_INTEL_H_
++
++int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
++                             struct memtrack_record *records,
++                             size_t *num_records);
++
++int zram_memtrack_get_memory(pid_t pid, enum memtrack_type type,
++                             struct memtrack_record *records,
++                             size_t *num_records);
++
++int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
++                             struct memtrack_record *records,
++                             size_t *num_records);
++
++#endif
+diff --git a/joule/display/libmemtrack/zram.c b/joule/display/libmemtrack/zram.c
+new file mode 100644
+index 0000000..adf60db
+--- /dev/null
++++ b/joule/display/libmemtrack/zram.c
+@@ -0,0 +1,157 @@
++/*
++ * Copyright (C) 2014 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <cutils/log.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/mman.h>
++
++#include <hardware/memtrack.h>
++
++#include "memtrack_intel.h"
++
++#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
++#define min(x, y) ((x) < (y) ? (x) : (y))
++
++static struct memtrack_record record_templates[] = {
++    {
++        .flags = MEMTRACK_FLAG_SMAPS_UNACCOUNTED | MEMTRACK_FLAG_PRIVATE |
++                 MEMTRACK_FLAG_NONSECURE,
++    },
++};
++
++static long get_zram_used_total_size() {
++  FILE* fp;
++  int len;
++  char line[1024];
++  unsigned long used_total = 0;
++
++  fp = fopen("/sys/block/zram0/mem_used_total", "r");
++  if (fp == NULL) {
++    return used_total;
++  }
++
++  if (fgets(line, sizeof(line), fp) != NULL) {
++    if (sscanf(line, "%lu", &used_total) != 1) {
++      return -errno;
++    }
++  }
++
++  fclose(fp);
++  return used_total;
++}
++
++static long get_swapped_total_size() {
++  FILE* fp;
++  char line[1024];
++  unsigned long swap_free = 0;
++  unsigned long swap_total = 0;
++
++  fp = fopen("/proc/meminfo", "r");
++  if (fp == NULL) {
++    return -errno;
++  }
++
++  while (fgets(line, sizeof(line), fp) != NULL) {
++    if (sscanf(line, "SwapTotal: %lu kB", &swap_total) == 1) {
++      break;
++    }
++  }
++
++  while (fgets(line, sizeof(line), fp) != NULL) {
++    if (sscanf(line, "SwapFree: %lu kB", &swap_free) == 1) {
++      break;
++    }
++  }
++
++  fclose(fp);
++  return (swap_total - swap_free) * 1024;
++}
++
++int zram_memtrack_get_memory(pid_t pid, enum memtrack_type type,
++                             struct memtrack_record* records,
++                             size_t* num_records) {
++  if (type != MEMTRACK_TYPE_OTHER) {
++    return 0;
++  }
++
++  size_t allocated_records = min(*num_records, ARRAY_SIZE(record_templates));
++  FILE* fp;
++  char line[1024];
++  char file_name[128];
++
++  double ratio = 0.0;
++  long zram_used = 0, swapped = 0;
++  unsigned long pswap_size = 0, pswap_total = 0;
++
++  *num_records = ARRAY_SIZE(record_templates);
++
++  /* fastpath to return the necessary number of records */
++  if (allocated_records == 0) {
++    return 0;
++  }
++
++  memcpy(records, record_templates,
++         sizeof(struct memtrack_record) * allocated_records);
++
++  zram_used = get_zram_used_total_size();
++  swapped = get_swapped_total_size();
++  if (swapped > 0) {
++    ratio = (double)zram_used / swapped;
++  }
++
++  sprintf(file_name, "/proc/%d/smaps", pid);
++  fp = fopen(file_name, "r");
++  if (fp == NULL) {
++    return -errno;
++  }
++
++  while (fgets(line, sizeof(line), fp) != NULL) {
++    if (sscanf(line, "PSwap: %lu kB", &pswap_size) == 1) {
++      pswap_total += pswap_size;
++    }
++  }
++
++  fclose(fp);
++
++  records[0].size_in_bytes = (size_t)(pswap_total * (1024 * ratio));
++
++#ifdef DEBUG_MEMTRACK
++    if (pswap_total > 0) {
++        ALOGE("Memtrack process: %d", pid);
++        ALOGE("Swapped total size: %lu kB", get_swapped_total_size() / 1024);
++        ALOGE("Zram used total size: %lu kB", zram_used / 1024);
++        ALOGE("Zram compress ratio (swapped/zram): %f", ratio > 0.0 ? 1/ratio : 1.0);
++        ALOGE("Process memtrack size: %zu kB", records[0].size_in_bytes / 1024);
++
++        fp = fopen(file_name, "r");
++        if (fp == NULL) {
++            return -errno;
++        }
++
++        ALOGE("Memtrack dump smpas: %s", file_name);
++        while (fgets(line, sizeof(line), fp) != NULL) {
++            ALOGE("%s", line);
++        }
++        fclose(fp);
++    }
++#endif
++
++  return 0;
++}
