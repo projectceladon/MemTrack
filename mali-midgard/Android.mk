@@ -24,4 +24,5 @@ LOCAL_SHARED_LIBRARIES := liblog libcutils
 LOCAL_SRC_FILES := memtrack_intel.c mali-midgard.c ion.c zram.c
 LOCAL_CFLAGS := -DLOG_TAG=\"libmemtrack\"
 LOCAL_MODULE := memtrack.$(TARGET_BOARD_PLATFORM)
+LOCAL_PROPRIETARY_MODULE := true
 include $(BUILD_SHARED_LIBRARY)
