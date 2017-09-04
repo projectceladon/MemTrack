@@ -68,8 +68,23 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
     snprintf(tmp, sizeof(tmp), "/proc/%d/smaps", pid);
     smaps_fp = fopen(tmp, "r");
     if (smaps_fp == NULL) {
+        while (1) {
+            char line[1024];
+            int ret, matched_pid, Gfxmem;
+
+            if (fgets(line, sizeof(line), fp) == NULL) {
+                break;
+            }
+            ret = sscanf(line, "%d %dK %*[^\n]", &matched_pid, &Gfxmem);
+
+            if (ret == 2 && matched_pid == pid) {
+                records[0].size_in_bytes = Gfxmem * 1024;
+                break;
+            }
+        }
+
         fclose(fp);
-        return -errno;
+        return 0;
     }
 
     while (1) {
