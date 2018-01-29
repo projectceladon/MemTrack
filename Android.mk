@@ -23,4 +23,6 @@ LOCAL_C_INCLUDES += hardware/libhardware/include
 LOCAL_SHARED_LIBRARIES := liblog libcutils
 LOCAL_SRC_FILES := memtrack_intel.c gen.c zram.c hmm.c
 LOCAL_MODULE := memtrack.$(TARGET_BOARD_PLATFORM)
+LOCAL_PROPRIETARY_MODULE := true
+LOCAL_HEADER_LIBRARIES += libutils_headers
 include $(BUILD_SHARED_LIBRARY)
