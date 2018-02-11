@@ -17,7 +17,7 @@ LOCAL_PATH := $(call my-dir)
 # HAL module implemenation stored in
 # hw/<POWERS_HARDWARE_MODULE_ID>.<ro.hardware>.so
 include $(CLEAR_VARS)
-
+LOCAL_CFLAGS += -Wno-error
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_C_INCLUDES += hardware/libhardware/include
 LOCAL_SHARED_LIBRARIES := liblog libcutils
