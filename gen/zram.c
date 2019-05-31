@@ -51,6 +51,7 @@ static long get_zram_used_total_size()
 
     if (fgets(line, sizeof(line), fp) != NULL) {
         if (sscanf(line, "%lu", &used_total) != 1) {
+            fclose(fp);
             return -errno;
         }
     }

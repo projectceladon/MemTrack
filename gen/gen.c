@@ -112,7 +112,7 @@ int gen_memtrack_get_memory(pid_t pid, enum memtrack_type type,
                     break;
                 }
 
-                if (sscanf(line, "%*s %*s %*s %*s %*s %[^\n]", cmdline) == 1) {
+                if (sscanf(line, "%*s %*s %*s %*s %*s %1000[^\n]", cmdline) == 1) {
                     continue;
                 }
 
