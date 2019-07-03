@@ -105,7 +105,7 @@ int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
         /* Format:
          * 16008 out of 18432 pages available
          */
-        ret = sscanf(line, "%d %*s\n", &size);
+        ret = sscanf(line, "%ld %*s\n", &size);
         if (ret != 1) {
             continue;
         }
@@ -136,7 +136,7 @@ int hmm_memtrack_get_memory(pid_t pid, enum memtrack_type type,
         /* Format:
          * 16008 (max 18432) pages available
          */
-        ret = sscanf(line, "%d %*s\n", &size);
+        ret = sscanf(line, "%ld %*s\n", &size);
         if (ret != 1) {
             continue;
         }
